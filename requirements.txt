@@ -1,0 +1,5 @@
+# PyTorch CUDA 12.1 wheels are hosted on the official PyTorch index.
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+torch==2.5.1+cu121
+jieba==0.42.1
