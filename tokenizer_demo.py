@@ -60,7 +60,7 @@ def run_demo(samples: list[str], spm_model: str, add_special: bool, max_len: int
             add_eos=add_special,
             max_len=max_len,
         )
-        piece_ids = processor.encode(text, out_type=int)
+        piece_ids = processor.Encode(text, out_type=int)
         if max_len is not None:
             reserved = 2 if add_special else 0
             piece_ids = piece_ids[: max(max_len - reserved, 0)]

@@ -22,6 +22,8 @@ from pathlib import Path
 import argparse
 import random
 import time
+from collections.abc import Sized
+from typing import cast
 
 import torch
 import torch.nn as nn
@@ -378,8 +380,8 @@ def main():
 
     # 打印关键数据配置，方便确认当前训练到底使用了多少样本和多大词表。
     print("数据后端: wmt19_spm")
-    print("训练样本数:", len(train_loader.dataset))
-    print("验证样本数:", len(valid_loader.dataset))
+    print("训练样本数:", len(cast(Sized, train_loader.dataset)))
+    print("验证样本数:", len(cast(Sized, valid_loader.dataset)))
     print("源端词表大小:", meta["src_vocab_size"])
     print("目标端词表大小:", meta["tgt_vocab_size"])
     print("src_pad_id:", meta["src_pad_id"])

@@ -85,7 +85,7 @@ def load_spm(model_path: str | Path = DEFAULT_SPM_MODEL):
         raise FileNotFoundError(f"SentencePiece model 不存在: {model_path}")
 
     processor = spm.SentencePieceProcessor()
-    processor.load(str(model_path))
+    processor.Load(str(model_path))
     validate_spm_ids(processor)
     return processor
 
@@ -102,7 +102,7 @@ def encode_text(
 
     max_len 包含 <bos>/<eos>。返回的 pieces 不包含特殊 token，只用于调试显示。
     """
-    piece_ids = processor.encode(clean_text(text), out_type=int)
+    piece_ids = processor.Encode(clean_text(text), out_type=int)
 
     if max_len is not None:
         reserved = int(add_bos) + int(add_eos)

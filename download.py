@@ -94,7 +94,9 @@ def parse_args():
     parser.add_argument("--config", type=str, default=DEFAULT_CONFIG)
     parser.add_argument("--cache_dir", type=str, default=None)
     parser.add_argument("--force", action="store_true", help="强制重新下载并重建缓存")
-    parser.add_argument("--show_sample", action="store_true", help="下载后打印一条样本")
+    parser.add_argument(
+        "--show_sample", action="store_true", help="下载后打印一条样本", default=True
+    )
     parser.add_argument("--sample_index", type=int, default=10)
 
     return parser.parse_args()
