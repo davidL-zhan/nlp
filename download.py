@@ -5,7 +5,7 @@
 不负责训练 tokenizer，也不负责训练 Transformer。
 
 默认行为：
-    E:\\miniconda\\envs\\NLP311\\python.exe download.py
+    python.exe download.py
 
 执行后 HuggingFace Datasets 会把数据保存到本机 cache。后续 data.py、train.py
 再次调用 load_dataset("wmt/wmt19", "zh-en") 时，会优先复用这份本地缓存。
