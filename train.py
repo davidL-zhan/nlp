@@ -339,11 +339,11 @@ def parse_args():
     parser.add_argument("--num_workers", type=int, default=0)
 
     # 模型参数
-    parser.add_argument("--embeding_size", type=int, default=256)
-    parser.add_argument("--num_heads", type=int, default=4)
-    parser.add_argument("--num_encoder_layers", type=int, default=3)
-    parser.add_argument("--num_decoder_layers", type=int, default=3)
-    parser.add_argument("--mlp_hidden_size", type=int, default=1024)
+    parser.add_argument("--embeding_size", type=int, default=512)
+    parser.add_argument("--num_heads", type=int, default=8)
+    parser.add_argument("--num_encoder_layers", type=int, default=6)
+    parser.add_argument("--num_decoder_layers", type=int, default=6)
+    parser.add_argument("--mlp_hidden_size", type=int, default=2048)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--max_len", type=int, default=5000)
 
