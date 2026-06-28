@@ -249,6 +249,24 @@ default train:  train split
 default valid:  validation split
 ```
 
+当前 `zh-en` 配置在本机统计到的 split 规模如下：
+
+```text
+train:       25,984,574 条中英句对
+validation:      3,981 条中英句对
+total:       25,988,555 条中英句对
+```
+
+HuggingFace Datasets 在本机会把数据处理成 Arrow cache 文件。当前缓存文件大小约为：
+
+```text
+train cache:       5.96 GiB
+validation cache:  1.06 MiB
+total cache:       5.96 GiB
+```
+
+这里的 cache 大小是本机 HuggingFace Datasets 处理后的 Arrow 缓存大小，不等同于网络下载时的压缩包大小。
+
 每条样本的核心字段是 `translation`，里面包含一对中英文句子：
 
 ```python
