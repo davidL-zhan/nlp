@@ -21,7 +21,7 @@ requirements.txt 依赖
 ## Install
 
 ```powershell
-E:\miniconda\envs\NLP311\python.exe -m pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 ## Download Dataset
@@ -29,13 +29,13 @@ E:\miniconda\envs\NLP311\python.exe -m pip install -r requirements.txt
 下载并缓存 WMT19 zh-en：
 
 ```powershell
-E:\miniconda\envs\NLP311\python.exe download.py --show_sample
+python download.py --show_sample
 ```
 
 如果本地已经有 HuggingFace cache，这个命令会直接复用缓存。强制重新下载：
 
 ```powershell
-E:\miniconda\envs\NLP311\python.exe download.py --force
+python download.py --force
 ```
 
 ## Train Tokenizer
@@ -50,25 +50,25 @@ data/spm/wmt19_zh_en_unigram_32k.vocab
 重新训练 SentencePiece：
 
 ```powershell
-E:\miniconda\envs\NLP311\python.exe spm.py train
+python spm.py train
 ```
 
 使用 500 万句对重新训练 SentencePiece：
 
 ```powershell
-E:\miniconda\envs\NLP311\python.exe spm.py train --max_pairs 5000000
+python spm.py train --max_pairs 5000000
 ```
 
 检查 tokenizer：
 
 ```powershell
-E:\miniconda\envs\NLP311\python.exe spm.py check
+python spm.py check
 ```
 
 检查 DataLoader：
 
 ```powershell
-E:\miniconda\envs\NLP311\python.exe data.py check
+python data.py check
 ```
 
 ## Train Model
@@ -76,19 +76,19 @@ E:\miniconda\envs\NLP311\python.exe data.py check
 极小 smoke run：
 
 ```powershell
-E:\miniconda\envs\NLP311\python.exe train.py --epochs 1 --batch_size 2 --hf_train_samples 8 --hf_valid_samples 4 --hf_test_samples 4 --max_train_batches 1 --max_valid_batches 1 --checkpoint_dir checkpoints/smoke --device cuda
+python train.py --epochs 1 --batch_size 2 --hf_train_samples 8 --hf_valid_samples 4 --hf_test_samples 4 --max_train_batches 1 --max_valid_batches 1 --checkpoint_dir checkpoints/smoke --device cuda
 ```
 
 正常训练：
 
 ```powershell
-E:\miniconda\envs\NLP311\python.exe train.py --epochs 10 --batch_size 32 --device cuda
+python train.py --epochs 10 --batch_size 32 --device cuda
 ```
 
 默认使用前 `100000` 条 WMT19 训练样本。全量训练：
 
 ```powershell
-E:\miniconda\envs\NLP311\python.exe train.py --epochs 10 --batch_size 32 --hf_train_samples 0 --device cuda
+python train.py --epochs 10 --batch_size 32 --hf_train_samples 0 --device cuda
 ```
 
 ## Inference
@@ -96,11 +96,11 @@ E:\miniconda\envs\NLP311\python.exe train.py --epochs 10 --batch_size 32 --hf_tr
 单句推理：
 
 ```powershell
-E:\miniconda\envs\NLP311\python.exe infer.py --text "我喜欢自然语言处理。" --device cuda
+python infer.py --text "我喜欢自然语言处理。" --device cuda
 ```
 
 交互模式：
 
 ```powershell
-E:\miniconda\envs\NLP311\python.exe infer.py --device cuda
+python infer.py --device cuda
 ```
