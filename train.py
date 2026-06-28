@@ -1,13 +1,13 @@
 """
 训练中译英 Transformer 模型。
 
-运行前需要先完成：
-    1. download.py        把 data/cmn.txt 切分成 train/valid/test 文本；
-    2. build_vocab.py     用训练集建立中英文词表；
-    3. encode_dataset.py  把文本转成 token id，并保存为 .pt 文件。
+数据入口是 HuggingFace WMT19 + SentencePiece：
+    1. data.py spm  训练 data/spm/*.model；
+    2. train.py     读取 HuggingFace datasets 本地缓存；
+    3. DataLoader   动态用 SentencePiece 编码 token id。
 
 本脚本负责：
-    1. 读取 dataset_dataloader.py 构建的 DataLoader；
+    1. 读取 data.py 构建的 DataLoader；
     2. 初始化 Transformer；
     3. 构造注意力 mask；
     4. 计算交叉熵 loss；
@@ -20,26 +20,40 @@
 
 from pathlib import Path
 import argparse
+import random
 import time
 
 import torch
 import torch.nn as nn
 
-from dataset_dataloader import build_dataloaders
-from Transformer import Transformer, make_src_mask, make_tgt_mask
-from utils import compute_loss, move_batch_to_device, set_seed
+from data import DEFAULT_SPM_MODEL, build_loaders
+from model import Transformer, make_src_mask, make_tgt_mask
+
+
+def set_seed(seed: int):
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+def move_batch_to_device(batch: dict, device: torch.device):
+    return {
+        key: value.to(device) if torch.is_tensor(value) else value
+        for key, value in batch.items()
+    }
+
+
+def compute_loss(logits: torch.Tensor, tgt_output: torch.Tensor, criterion):
+    vocab_size = logits.size(-1)
+    return criterion(logits.reshape(-1, vocab_size), tgt_output.reshape(-1))
 
 
 def build_model(meta: dict, args: argparse.Namespace, device: torch.device):
     """
-    根据 meta.json 里的词表大小创建 Transformer。
+    根据 SentencePiece meta 里的词表大小创建 Transformer。
 
-    meta["src_vocab_size"] 是中文源语言词表大小。
-    meta["tgt_vocab_size"] 是英文目标语言词表大小。
-
-    这里没有直接使用 Transformer 默认的 512 维、6 层配置，
-    因为当前数据集只有两万多条，先用较小模型更容易快速验证训练链路。
-    等确认 loss 能正常下降后，再把层数和隐藏维度调大。
+    当前使用共享 SentencePiece 词表，所以 src_vocab_size 和 tgt_vocab_size
+    通常相同，但仍保留两个字段，方便模型接口保持清晰。
     """
     model = Transformer(
         src_vocab_size=meta["src_vocab_size"],
@@ -54,6 +68,25 @@ def build_model(meta: dict, args: argparse.Namespace, device: torch.device):
     )
 
     return model.to(device)
+
+
+def build_training_dataloaders(args: argparse.Namespace):
+    return build_loaders(
+        dataset_name=args.hf_dataset,
+        dataset_config=args.hf_config,
+        train_split=args.hf_train_split,
+        valid_split=args.hf_valid_split,
+        spm_model=args.spm_model,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        max_src_len=args.max_src_tokens,
+        max_tgt_len=args.max_tgt_tokens,
+        max_train_samples=args.hf_train_samples,
+        max_valid_samples=args.hf_valid_samples,
+        max_test_samples=args.hf_test_samples,
+        seed=args.seed,
+        cache_dir=args.hf_cache_dir,
+    )
 
 
 def train_epoch(
@@ -78,7 +111,7 @@ def train_epoch(
     5. 用 logits 和 tgt_output 计算 loss。
     6. 反向传播，更新参数。
 
-    注意 tgt_input 和 tgt_output 已经在 dataset_dataloader.py 里错开一位：
+    注意 tgt_input 和 tgt_output 已经在 DataLoader collator 里错开一位：
         tgt_input : <bos> I like cats .
         tgt_output:       I like cats . <eos>
     """
@@ -228,8 +261,22 @@ def parse_args():
     )
 
     # 数据和保存路径
-    parser.add_argument("--encoded_dir", type=str, default="data/cmn_eng_encoded")
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
+    parser.add_argument(
+        "--spm_model",
+        type=str,
+        default=DEFAULT_SPM_MODEL,
+    )
+    parser.add_argument("--hf_dataset", type=str, default="wmt/wmt19")
+    parser.add_argument("--hf_config", type=str, default="zh-en")
+    parser.add_argument("--hf_train_split", type=str, default="train")
+    parser.add_argument("--hf_valid_split", type=str, default="validation")
+    parser.add_argument("--hf_cache_dir", type=str, default=None)
+    parser.add_argument("--hf_train_samples", type=int, default=100000)
+    parser.add_argument("--hf_valid_samples", type=int, default=3981)
+    parser.add_argument("--hf_test_samples", type=int, default=3981)
+    parser.add_argument("--max_src_tokens", type=int, default=128)
+    parser.add_argument("--max_tgt_tokens", type=int, default=128)
 
     # 训练参数
     parser.add_argument("--epochs", type=int, default=20)
@@ -274,14 +321,13 @@ def main():
 
     print("使用设备:", device)
 
-    train_loader, valid_loader, _, meta = build_dataloaders(
-        encoded_dir=args.encoded_dir,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-    )
+    train_loader, valid_loader, _, meta = build_training_dataloaders(args)
 
-    print("中文词表大小:", meta["src_vocab_size"])
-    print("英文词表大小:", meta["tgt_vocab_size"])
+    print("数据后端: wmt19_spm")
+    print("训练样本数:", len(train_loader.dataset))
+    print("验证样本数:", len(valid_loader.dataset))
+    print("源端词表大小:", meta["src_vocab_size"])
+    print("目标端词表大小:", meta["tgt_vocab_size"])
     print("src_pad_id:", meta["src_pad_id"])
     print("tgt_pad_id:", meta["tgt_pad_id"])
 

@@ -3,9 +3,8 @@
 
 这个文件只定义模型结构和注意力 mask 工具函数，不负责数据读取、训练循环或推理交互。
 项目中的调用关系是：
-    train.py     -> 使用 Transformer 训练中译英模型；
-    inference.py -> 加载 checkpoint 后使用 Transformer 做逐词解码；
-    demo.py      -> 复用 inference.py 的推理函数做终端演示。
+    train.py -> 使用 Transformer 训练中译英模型；
+    infer.py -> 加载 checkpoint 后使用 Transformer 做逐词解码；
 
 本实现采用 batch_first 风格：
     输入 token id 形状为 [batch_size, seq_len]；
