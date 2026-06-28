@@ -274,7 +274,7 @@ class Encoder(nn.Module):
         max_len=5000,
         pad_id=0,
     ):
-        super().__init__()
+        super().__init__()  # [1, seq_len] 
         self.embeding = nn.Embedding(
             vocab_size, embeding_size, padding_idx=pad_id
         )  # [vocab_size, embeding_size] vocab_size个词向量，每个词向量的维度为embeding_size

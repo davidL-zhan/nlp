@@ -6,6 +6,7 @@ LayerNorm 的核心思想：
 
 在 Transformer 中，常见输入形状是：
     x: [batch_size, seq_len, hidden_size]
+        [1,1,512]
 
 如果 normalized_shape=hidden_size，那么 LayerNorm 会对每个 token 的 hidden_size 维度
 单独计算均值和方差：

@@ -130,18 +130,18 @@ def encode_text(
         tokens:
             分词后的 token 列表，便于调试。
     """
-    tokens = tokenizer(text)
+    tokens = tokenizer(text)  # ['我', '喜欢', '自然语言', '处理']
 
     ids = []
 
-    if add_bos:
+    if add_bos: #　ids :[2,]
         ids.append(vocab[BOS_TOKEN])
 
     unk_id = vocab[UNK_TOKEN]
 
-    for token in tokens:
+    for token in tokens:  # ['我', '喜欢', '自然语言', '处理']
         token_id = vocab.get(token, unk_id)
-        ids.append(token_id)
+        ids.append(token_id) 
 
     if add_eos:
         ids.append(vocab[EOS_TOKEN])

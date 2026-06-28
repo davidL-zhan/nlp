@@ -232,7 +232,7 @@ def parse_args():
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
 
     # 训练参数
-    parser.add_argument("--epochs", type=int, default=500)
+    parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight_decay", type=float, default=0.0)
