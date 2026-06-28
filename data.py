@@ -1,131 +1,46 @@
 """
-SentencePiece and WMT19 data utilities.
+WMT19 Dataset 和 DataLoader 构建工具。
 
-This file owns all reusable data code:
-- train the shared SentencePiece tokenizer;
-- encode/decode text with that tokenizer;
-- build WMT19 zh-en DataLoaders for Transformer training.
+这个文件只负责数据集读取和 batch 构造：
+1. 从 HuggingFace Datasets 读取 WMT19 zh-en；
+2. 用 spm.py 中的 SentencePiece 工具把文本编码成 token id；
+3. 在 collator 中动态 padding；
+4. 返回 train/valid/test DataLoader 和 checkpoint 需要保存的 meta。
+
+SentencePiece 的训练、加载、编码/解码实现都在 spm.py 中。
 """
 
-from pathlib import Path
 import argparse
-import json
+from pathlib import Path
 
-import sentencepiece as spm
 import torch
 from datasets import load_dataset
 from torch.utils.data import DataLoader, Dataset
 
-PAD_TOKEN = "<pad>"
-UNK_TOKEN = "<unk>"
-BOS_TOKEN = "<bos>"
-EOS_TOKEN = "<eos>"
-
-PAD_ID = 0
-UNK_ID = 1
-BOS_ID = 2
-EOS_ID = 3
-
-SPECIAL_IDS = {PAD_ID, UNK_ID, BOS_ID, EOS_ID}
-DEFAULT_SPM_MODEL = "data/spm/wmt19_zh_en_unigram_32k.model"
-DEFAULT_DATASET = "wmt/wmt19"
-DEFAULT_CONFIG = "zh-en"
-
-
-def clean_text(text: str):
-    return text.replace("\n", " ").strip()
-
-
-def load_json(path: str | Path):
-    path = Path(path)
-
-    if not path.exists():
-        raise FileNotFoundError(f"文件不存在: {path}")
-
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_json(obj, path: str | Path):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2)
-
-
-def validate_spm_ids(processor: spm.SentencePieceProcessor):
-    expected = {
-        "pad_id": PAD_ID,
-        "unk_id": UNK_ID,
-        "bos_id": BOS_ID,
-        "eos_id": EOS_ID,
-    }
-    actual = {
-        "pad_id": processor.pad_id(),
-        "unk_id": processor.unk_id(),
-        "bos_id": processor.bos_id(),
-        "eos_id": processor.eos_id(),
-    }
-
-    for key, expected_id in expected.items():
-        if actual[key] != expected_id:
-            raise ValueError(
-                f"SentencePiece {key}={actual[key]}, "
-                f"但项目要求 {key}={expected_id}。"
-            )
-
-
-def load_spm(model_path: str | Path = DEFAULT_SPM_MODEL):
-    model_path = Path(model_path)
-
-    if not model_path.exists():
-        raise FileNotFoundError(f"SentencePiece model 不存在: {model_path}")
-
-    processor = spm.SentencePieceProcessor()
-    processor.load(str(model_path))
-    validate_spm_ids(processor)
-    return processor
-
-
-def encode_text(
-    text: str,
-    processor: spm.SentencePieceProcessor,
-    add_bos: bool = True,
-    add_eos: bool = True,
-    max_len: int | None = None,
-):
-    piece_ids = processor.encode(clean_text(text), out_type=int)
-
-    if max_len is not None:
-        reserved = int(add_bos) + int(add_eos)
-        piece_ids = piece_ids[: max(max_len - reserved, 0)]
-
-    ids = []
-    if add_bos:
-        ids.append(processor.bos_id())
-
-    ids.extend(piece_ids)
-
-    if add_eos:
-        ids.append(processor.eos_id())
-
-    pieces = [processor.id_to_piece(piece_id) for piece_id in piece_ids]
-    return ids, pieces
-
-
-def decode_ids(
-    ids: list[int],
-    processor: spm.SentencePieceProcessor,
-    skip_special: bool = True,
-):
-    if skip_special:
-        ids = [piece_id for piece_id in ids if piece_id not in SPECIAL_IDS]
-
-    return processor.decode(ids)
+from spm import (
+    BOS_TOKEN,
+    DEFAULT_CONFIG,
+    DEFAULT_DATASET,
+    DEFAULT_SPM_MODEL,
+    EOS_TOKEN,
+    PAD_TOKEN,
+    UNK_TOKEN,
+    clean_text,
+    encode_text,
+    load_spm,
+)
 
 
 def pad_sequences(sequences, pad_id: int):
+    """
+    把同一个 batch 内不同长度的序列 pad 到相同长度。
+
+    输入是若干一维 LongTensor，输出是二维 LongTensor：
+        [batch_size, 当前 batch 最大序列长度]
+
+    这里做的是动态 padding，只 pad 到当前 batch 的最大长度，
+    比固定 pad 到全局 max_len 更省显存和计算。
+    """
     batch_size = len(sequences)
     max_len = max(seq.size(0) for seq in sequences)
 
@@ -141,80 +56,6 @@ def pad_sequences(sequences, pad_id: int):
     return batch
 
 
-def train_spm(
-    out_dir: str | Path = "data/spm",
-    dataset_name: str = DEFAULT_DATASET,
-    dataset_config: str = DEFAULT_CONFIG,
-    split: str = "train",
-    max_pairs: int = 1_000_000,
-    vocab_size: int = 32000,
-):
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    corpus_path = out_dir / "wmt19_zh_en_spm_corpus.txt"
-    model_prefix = out_dir / f"wmt19_zh_en_unigram_{vocab_size // 1000}k"
-    dataset = load_dataset(dataset_name, dataset_config, split=split)
-
-    print("开始导出 SentencePiece 训练语料...")
-    print("最多使用句对数:", max_pairs)
-
-    written_lines = 0
-    used_pairs = 0
-
-    with corpus_path.open("w", encoding="utf-8") as f:
-        for item in dataset:
-            translation = item["translation"]
-            zh = clean_text(translation["zh"])
-            en = clean_text(translation["en"])
-
-            if not zh or not en:
-                continue
-
-            if len(zh) > 300 or len(en.split()) > 120:
-                continue
-
-            f.write(zh + "\n")
-            f.write(en + "\n")
-
-            written_lines += 2
-            used_pairs += 1
-
-            if used_pairs >= max_pairs:
-                break
-
-            if used_pairs % 100000 == 0:
-                print("已导出句对:", used_pairs)
-
-    print("语料文件:", corpus_path)
-    print("使用句对数:", used_pairs)
-    print("写入行数:", written_lines)
-    print("开始训练 SentencePiece Unigram...")
-
-    spm.SentencePieceTrainer.train(
-        input=str(corpus_path),
-        model_prefix=str(model_prefix),
-        model_type="unigram",
-        vocab_size=vocab_size,
-        character_coverage=0.9995,
-        pad_id=PAD_ID,
-        unk_id=UNK_ID,
-        bos_id=BOS_ID,
-        eos_id=EOS_ID,
-        pad_piece=PAD_TOKEN,
-        unk_piece=UNK_TOKEN,
-        bos_piece=BOS_TOKEN,
-        eos_piece=EOS_TOKEN,
-        input_sentence_size=max_pairs * 2,
-        shuffle_input_sentence=True,
-        hard_vocab_limit=False,
-    )
-
-    print("训练完成:")
-    print(str(model_prefix) + ".model")
-    print(str(model_prefix) + ".vocab")
-
-
 def build_meta(
     spm_model: str | Path,
     max_src_len: int,
@@ -222,6 +63,12 @@ def build_meta(
     dataset_name: str,
     dataset_config: str,
 ):
+    """
+    根据 tokenizer 和数据设置构造训练/推理共用的 meta 字典。
+
+    meta 会被保存到 checkpoint 中。推理时不需要重新猜 tokenizer 路径、
+    词表大小或特殊 token id，而是直接读取 checkpoint["meta"]。
+    """
     processor = load_spm(spm_model)
     vocab_size = processor.get_piece_size()
 
@@ -250,6 +97,18 @@ def build_meta(
 
 
 class WMT19Dataset(Dataset):
+    """
+    HuggingFace WMT19 zh-en 的 PyTorch Dataset 包装。
+
+    Dataset 的职责：
+    1. 根据 index 取出一条 HuggingFace 样本；
+    2. 读取 translation["zh"] 和 translation["en"]；
+    3. 用 SentencePiece 编码成 src_ids/tgt_ids；
+    4. 返回单条样本，不做 padding。
+
+    padding 放到 TranslationCollator 中做，因为同一个 batch 的最大长度是动态的。
+    """
+
     def __init__(
         self,
         hf_dataset,
@@ -257,6 +116,13 @@ class WMT19Dataset(Dataset):
         max_src_len: int = 128,
         max_tgt_len: int = 128,
     ):
+        """
+        初始化数据集包装器。
+
+        self._sp 故意延迟加载：
+        - num_workers=0 时，第一次 __getitem__ 再加载；
+        - num_workers>0 时，每个 worker 进程单独加载，避免 SentencePiece 对象 pickle 问题。
+        """
         self.hf_dataset = hf_dataset
         self.spm_model = str(spm_model)
         self.max_src_len = max_src_len
@@ -264,19 +130,32 @@ class WMT19Dataset(Dataset):
         self._sp = None
 
     def __getstate__(self):
+        """
+        DataLoader 多进程复制 Dataset 时会调用 pickle。
+
+        SentencePieceProcessor 不适合直接跨进程 pickle，
+        所以复制状态时把 _sp 清空，让 worker 进程自己重新加载。
+        """
         state = self.__dict__.copy()
         state["_sp"] = None
         return state
 
     def _processor(self):
+        """懒加载 SentencePieceProcessor。"""
         if self._sp is None:
             self._sp = load_spm(self.spm_model)
         return self._sp
 
     def __len__(self):
+        """返回当前 split 的样本数。"""
         return len(self.hf_dataset)
 
     def __getitem__(self, index):
+        """
+        返回一条已经编码但尚未 padding 的训练样本。
+
+        src_ids/tgt_ids 都是一维 LongTensor，长度可能不同。
+        """
         item = self.hf_dataset[index]
         translation = item["translation"]
         processor = self._processor()
@@ -297,14 +176,29 @@ class WMT19Dataset(Dataset):
 
 
 class TranslationCollator:
+    """
+    DataLoader 的 batch 组装器。
+
+    它负责把多条样本合成一个 batch：
+    - 对 src_ids 和 tgt_ids 做动态 padding；
+    - 构造 decoder 训练用的 tgt_input/tgt_output；
+    - 额外保留原文和 SentencePiece pieces 方便调试。
+    """
+
     def __init__(self, src_pad_id: int, tgt_pad_id: int):
+        """保存源端和目标端的 padding id。共享词表时两者相同。"""
         self.src_pad_id = src_pad_id
         self.tgt_pad_id = tgt_pad_id
 
     def __call__(self, batch):
+        """把 list[dict] 样本转换成模型训练需要的 batch dict。"""
         src_ids = pad_sequences([item["src_ids"] for item in batch], self.src_pad_id)
         tgt_ids = pad_sequences([item["tgt_ids"] for item in batch], self.tgt_pad_id)
 
+        # decoder 训练采用 teacher forcing：
+        # tgt_ids:     <bos> I like NLP . <eos>
+        # tgt_input:   <bos> I like NLP .
+        # tgt_output:        I like NLP . <eos>
         tgt_input = tgt_ids[:, :-1]
         tgt_output = tgt_ids[:, 1:]
 
@@ -323,6 +217,11 @@ class TranslationCollator:
 
 
 def select_samples(hf_dataset, max_samples: int):
+    """
+    从 HuggingFace Dataset 前部截取固定数量样本。
+
+    max_samples <= 0 表示不截取，直接使用完整 split。
+    """
     if max_samples is None or max_samples <= 0:
         return hf_dataset
 
@@ -345,6 +244,12 @@ def build_loaders(
     seed: int = 42,
     cache_dir: str | None = None,
 ):
+    """
+    构建 train/valid/test 三个 DataLoader 和 meta 信息。
+
+    训练默认只取前 100000 条 WMT19 train 样本，便于快速验证。
+    如果需要全量训练，命令行传 --hf_train_samples 0。
+    """
     meta = build_meta(
         spm_model=spm_model,
         max_src_len=max_src_len,
@@ -353,6 +258,7 @@ def build_loaders(
         dataset_config=dataset_config,
     )
 
+    # 这里会优先使用本地 HuggingFace cache；如果缓存不存在则联网下载。
     train_hf = load_dataset(
         dataset_name,
         dataset_config,
@@ -366,6 +272,7 @@ def build_loaders(
         cache_dir=cache_dir,
     )
 
+    # 为了让学习和调试更快，默认只取子集；正式训练时可以设为 0 使用全量。
     train_hf = select_samples(train_hf, max_train_samples)
     valid_hf = select_samples(valid_hf, max_valid_samples)
     test_hf = select_samples(valid_hf, max_test_samples)
@@ -376,6 +283,7 @@ def build_loaders(
 
     collate_fn = TranslationCollator(meta["src_pad_id"], meta["tgt_pad_id"])
 
+    # 给 DataLoader shuffle 一个固定随机种子，保证调试时样本顺序可复现。
     generator = torch.Generator()
     generator.manual_seed(seed)
     shuffle_train = max_train_samples is not None and max_train_samples > 0
@@ -406,21 +314,8 @@ def build_loaders(
     return train_loader, valid_loader, test_loader, meta
 
 
-def check_tokenizer(spm_model: str | Path = DEFAULT_SPM_MODEL):
-    processor = load_spm(spm_model)
-    sample = "我喜欢自然语言处理。"
-    ids, pieces = encode_text(sample, processor)
-
-    print(pieces)
-    print(ids)
-    print(decode_ids(ids, processor))
-    print("pad:", processor.pad_id())
-    print("unk:", processor.unk_id())
-    print("bos:", processor.bos_id())
-    print("eos:", processor.eos_id())
-
-
 def check_loader(spm_model: str | Path = DEFAULT_SPM_MODEL):
+    """打印一个小 batch，检查 WMT19 -> SentencePiece -> DataLoader 是否正常。"""
     train_loader, valid_loader, _, meta = build_loaders(
         spm_model=spm_model,
         batch_size=4,
@@ -446,34 +341,21 @@ def check_loader(spm_model: str | Path = DEFAULT_SPM_MODEL):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Data utilities.")
+    """解析 data.py 的子命令。"""
+    parser = argparse.ArgumentParser(description="Dataset/DataLoader utilities.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    spm_parser = subparsers.add_parser("spm", help="train SentencePiece")
-    spm_parser.add_argument("--out_dir", type=str, default="data/spm")
-    spm_parser.add_argument("--max_pairs", type=int, default=1_000_000)
-    spm_parser.add_argument("--vocab_size", type=int, default=32000)
-
-    check_parser = subparsers.add_parser("check", help="check tokenizer and loader")
+    check_parser = subparsers.add_parser("check", help="check DataLoader")
     check_parser.add_argument("--spm_model", type=str, default=DEFAULT_SPM_MODEL)
 
     return parser.parse_args()
 
 
 def main():
+    """命令行入口：检查数据管线。"""
     args = parse_args()
 
-    if args.command == "spm":
-        train_spm(
-            out_dir=args.out_dir,
-            max_pairs=args.max_pairs,
-            vocab_size=args.vocab_size,
-        )
-        return
-
     if args.command == "check":
-        check_tokenizer(args.spm_model)
-        print()
         check_loader(args.spm_model)
         return
 

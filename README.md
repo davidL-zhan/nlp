@@ -10,7 +10,9 @@ WMT19 zh-en -> shared SentencePiece -> DataLoader -> Transformer -> checkpoint -
 
 ```text
 model.py          Transformer 模型和 attention mask
-data.py           SentencePiece 训练、编码/解码、WMT19 DataLoader
+spm.py            SentencePiece 训练、编码/解码和检查
+data.py           WMT19 Dataset 和 DataLoader 构建
+download.py       下载并缓存 WMT19 zh-en 数据集
 train.py          训练入口
 infer.py          单句推理和交互推理入口
 requirements.txt 依赖
@@ -20,6 +22,20 @@ requirements.txt 依赖
 
 ```powershell
 E:\miniconda\envs\NLP311\python.exe -m pip install -r requirements.txt
+```
+
+## Download Dataset
+
+下载并缓存 WMT19 zh-en：
+
+```powershell
+E:\miniconda\envs\NLP311\python.exe download.py --show_sample
+```
+
+如果本地已经有 HuggingFace cache，这个命令会直接复用缓存。强制重新下载：
+
+```powershell
+E:\miniconda\envs\NLP311\python.exe download.py --force
 ```
 
 ## Train Tokenizer
@@ -34,10 +50,22 @@ data/spm/wmt19_zh_en_unigram_32k.vocab
 重新训练 SentencePiece：
 
 ```powershell
-E:\miniconda\envs\NLP311\python.exe data.py spm
+E:\miniconda\envs\NLP311\python.exe spm.py train
 ```
 
-检查 tokenizer 和 DataLoader：
+使用 500 万句对重新训练 SentencePiece：
+
+```powershell
+E:\miniconda\envs\NLP311\python.exe spm.py train --max_pairs 5000000
+```
+
+检查 tokenizer：
+
+```powershell
+E:\miniconda\envs\NLP311\python.exe spm.py check
+```
+
+检查 DataLoader：
 
 ```powershell
 E:\miniconda\envs\NLP311\python.exe data.py check

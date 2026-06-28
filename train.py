@@ -2,7 +2,7 @@
 训练中译英 Transformer 模型。
 
 数据入口是 HuggingFace WMT19 + SentencePiece：
-    1. data.py spm  训练 data/spm/*.model；
+    1. spm.py train 训练 data/spm/*.model；
     2. train.py     读取 HuggingFace datasets 本地缓存；
     3. DataLoader   动态用 SentencePiece 编码 token id。
 
@@ -26,17 +26,30 @@ import time
 import torch
 import torch.nn as nn
 
-from data import DEFAULT_SPM_MODEL, build_loaders
+from data import build_loaders
 from model import Transformer, make_src_mask, make_tgt_mask
+from spm import DEFAULT_SPM_MODEL
 
 
 def set_seed(seed: int):
+    """
+    固定随机种子，尽量保证调试时可复现。
+
+    注意：GPU 上某些底层算子仍可能存在非确定性，
+    这里主要用于固定 Python 随机数、PyTorch 初始化和 DataLoader shuffle。
+    """
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
 
 def move_batch_to_device(batch: dict, device: torch.device):
+    """
+    把 batch 中的 tensor 移动到指定设备。
+
+    batch 里既有模型输入 tensor，也有调试用的原始文本和 pieces。
+    原始文本是 list[str]，不能调用 .to(device)，所以这里只移动 tensor。
+    """
     return {
         key: value.to(device) if torch.is_tensor(value) else value
         for key, value in batch.items()
@@ -44,6 +57,18 @@ def move_batch_to_device(batch: dict, device: torch.device):
 
 
 def compute_loss(logits: torch.Tensor, tgt_output: torch.Tensor, criterion):
+    """
+    计算 token-level 交叉熵 loss。
+
+    模型输出 logits 的形状是：
+        [batch_size, tgt_len, tgt_vocab_size]
+
+    CrossEntropyLoss 需要：
+        input:  [N, num_classes]
+        target: [N]
+
+    因此这里把 batch_size 和 tgt_len 两个维度展平。
+    """
     vocab_size = logits.size(-1)
     return criterion(logits.reshape(-1, vocab_size), tgt_output.reshape(-1))
 
@@ -71,6 +96,12 @@ def build_model(meta: dict, args: argparse.Namespace, device: torch.device):
 
 
 def build_training_dataloaders(args: argparse.Namespace):
+    """
+    根据命令行参数构建训练/验证/测试 DataLoader。
+
+    具体数据读取和 SentencePiece 编码逻辑都在 data.py 中，
+    train.py 只关心返回的 batch 是否包含 src_ids、tgt_input、tgt_output。
+    """
     return build_loaders(
         dataset_name=args.hf_dataset,
         dataset_config=args.hf_config,
@@ -117,6 +148,8 @@ def train_epoch(
     """
     model.train()
 
+    # total_loss 累计的是“每个非 pad token 的 loss 总和”，
+    # total_tokens 累计的是非 pad token 数，最终返回 token 平均 loss。
     total_loss = 0.0
     total_tokens = 0
     start_time = time.time()
@@ -127,6 +160,9 @@ def train_epoch(
 
         batch = move_batch_to_device(batch, device)
 
+        # src_ids: 中文源句 token id，形状 [B, src_len]
+        # tgt_input: decoder 输入，形状 [B, tgt_len - 1]
+        # tgt_output: decoder 监督目标，形状 [B, tgt_len - 1]
         src_ids = batch["src_ids"]
         tgt_input = batch["tgt_input"]
         tgt_output = batch["tgt_output"]
@@ -142,6 +178,9 @@ def train_epoch(
 
         optimizer.zero_grad(set_to_none=True)
 
+        # 前向传播：
+        # encoder 读取 src_ids；
+        # decoder 在 tgt_input 的 teacher forcing 条件下预测每个下一个 token。
         logits = model(
             src=src_ids,
             tgt=tgt_input,
@@ -187,6 +226,7 @@ def valid_epoch(model, valid_loader, meta, criterion, device, max_batches: int):
     """
     model.eval()
 
+    # 验证阶段只统计 loss，不更新参数。
     total_loss = 0.0
     total_tokens = 0
 
@@ -196,6 +236,7 @@ def valid_epoch(model, valid_loader, meta, criterion, device, max_batches: int):
 
         batch = move_batch_to_device(batch, device)
 
+        # 验证阶段的 mask 构造和训练阶段完全一致，保证评估口径一致。
         src_ids = batch["src_ids"]
         tgt_input = batch["tgt_input"]
         tgt_output = batch["tgt_output"]
@@ -241,6 +282,8 @@ def save_checkpoint(
     """
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # checkpoint 中保存 meta 和 args，是为了让 infer.py 能恢复完全一致的模型结构、
+    # tokenizer 路径、词表大小和特殊 token id。
     torch.save(
         {
             "epoch": epoch,
@@ -256,6 +299,14 @@ def save_checkpoint(
 
 
 def parse_args():
+    """
+    定义训练命令行参数。
+
+    参数大致分三类：
+    1. 数据/tokenizer/checkpoint 路径；
+    2. 训练超参数；
+    3. Transformer 模型结构参数。
+    """
     parser = argparse.ArgumentParser(
         description="Train a Transformer model for Chinese-to-English translation."
     )
@@ -311,9 +362,11 @@ def parse_args():
 
 
 def main():
+    """训练主入口。"""
     args = parse_args()
     set_seed(args.seed)
 
+    # 默认自动使用 CUDA；如果需要 CPU 调试，可以传 --device cpu。
     if args.device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
@@ -323,6 +376,7 @@ def main():
 
     train_loader, valid_loader, _, meta = build_training_dataloaders(args)
 
+    # 打印关键数据配置，方便确认当前训练到底使用了多少样本和多大词表。
     print("数据后端: wmt19_spm")
     print("训练样本数:", len(train_loader.dataset))
     print("验证样本数:", len(valid_loader.dataset))
@@ -349,6 +403,7 @@ def main():
 
     best_valid_loss = float("inf")
 
+    # 每个 epoch 后保存 last.pt；如果验证集 loss 更低，则额外保存 best.pt。
     for epoch in range(1, args.epochs + 1):
         print(f"\nEpoch {epoch}/{args.epochs}")
 

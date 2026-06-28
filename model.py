@@ -6,6 +6,10 @@
     train.py -> 使用 Transformer 训练中译英模型；
     infer.py -> 加载 checkpoint 后使用 Transformer 做逐词解码；
 
+当前项目的数据进入模型前已经在 data.py 中完成：
+    原始文本 -> SentencePiece token id -> batch padding -> tgt_input/tgt_output。
+因此 model.py 只处理整数 token id 和 attention mask，不关心原始中文/英文字符串。
+
 本实现采用 batch_first 风格：
     输入 token id 形状为 [batch_size, seq_len]；
     embedding 后形状为 [batch_size, seq_len, embeding_size]。
