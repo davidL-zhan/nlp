@@ -20,13 +20,16 @@
 
 from pathlib import Path
 import argparse
+from itertools import islice
 import random
+import sys
 import time
 from collections.abc import Sized
 from typing import cast
 
 import torch
 import torch.nn as nn
+from tqdm.auto import tqdm
 
 from data import build_loaders
 from model import Transformer, make_src_mask, make_tgt_mask
@@ -156,9 +159,23 @@ def train_epoch(
     total_tokens = 0
     start_time = time.time()
 
-    for step, batch in enumerate(train_loader, start=1):
-        if max_batches > 0 and step > max_batches:
-            break
+    total_batches = len(cast(Sized, train_loader))
+    if max_batches > 0:
+        total_batches = min(total_batches, max_batches)
+        train_iter = islice(train_loader, max_batches)
+    else:
+        train_iter = train_loader
+
+    progress = tqdm(
+        train_iter,
+        total=total_batches,
+        desc="train",
+        dynamic_ncols=True,
+        file=sys.stdout,
+        leave=True,
+    )
+
+    for step, batch in enumerate(progress, start=1):
 
         batch = move_batch_to_device(batch, device)
 
@@ -205,14 +222,13 @@ def train_epoch(
         total_loss += loss.item() * non_pad_tokens
         total_tokens += non_pad_tokens
 
-        if log_interval > 0 and step % log_interval == 0:
+        if log_interval <= 0 or step % log_interval == 0 or step == total_batches:
             avg_loss = total_loss / max(total_tokens, 1)
             elapsed = time.time() - start_time
-            print(
-                f"  step {step:5d} | "
-                f"train loss {avg_loss:.4f} | "
-                f"tokens {total_tokens} | "
-                f"time {elapsed:.1f}s"
+            progress.set_postfix(
+                train_loss=f"{avg_loss:.4f}",
+                tokens=total_tokens,
+                time=f"{elapsed:.1f}s",
             )
 
     return total_loss / max(total_tokens, 1)
