@@ -70,7 +70,7 @@ def build_meta(
     词表大小或特殊 token id，而是直接读取 checkpoint["meta"]。
     """
     processor = load_spm(spm_model)
-    vocab_size = processor.get_piece_size()
+    vocab_size = processor.GetPieceSize()
 
     return {
         "tokenizer_type": "sentencepiece",

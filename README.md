@@ -45,6 +45,7 @@ python -m pip install -r requirements.txt
 torch==2.5.1+cu121
 datasets==5.0.0
 sentencepiece
+tqdm
 ```
 
 ## Files

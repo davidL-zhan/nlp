@@ -117,7 +117,7 @@ def encode_text(
     if add_eos:
         ids.append(processor.eos_id())
 
-    pieces = [processor.id_to_piece(piece_id) for piece_id in piece_ids]
+    pieces = [processor.IdToPiece(piece_id) for piece_id in piece_ids]
     return ids, pieces
 
 
@@ -130,7 +130,7 @@ def decode_ids(
     if skip_special:
         ids = [piece_id for piece_id in ids if piece_id not in SPECIAL_IDS]
 
-    return processor.decode(ids)
+    return processor.Decode(ids)
 
 
 def train_spm(
@@ -192,7 +192,7 @@ def train_spm(
     print("写入行数:", written_lines)
     print("开始训练 SentencePiece Unigram...")
 
-    spm.SentencePieceTrainer.train(
+    spm.SentencePieceTrainer.Train(
         input=str(corpus_path),
         model_prefix=str(model_prefix),
         model_type="unigram",
