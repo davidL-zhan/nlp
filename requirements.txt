@@ -5,3 +5,4 @@ torch==2.5.1+cu121
 datasets==5.0.0
 sentencepiece
 tqdm
+torchInfo
