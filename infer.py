@@ -240,7 +240,7 @@ def main():
             max_decode_len=args.max_decode_len,
         )
 
-        print("中文:", text)
+        # print("中文:", text)
 
         if args.show_tokens:
             print("中文 pieces:", result["src_pieces"])

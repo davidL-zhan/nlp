@@ -43,23 +43,26 @@ class SelfAttention(nn.Module):
 
     def __init__(self, dropout=0.1):
         super().__init__()
-        self.dropout = nn.Dropout(dropout)  # 对10%的神经元做随机失活, 防止过拟合
+        self.dropout = nn.Dropout(dropout)  # 对注意力权重做随机失活, 防止过拟合
         self.softmax = nn.Softmax(dim=-1)  # 对最后的一维进行归一化，转换成概率分布
 
     def forward(self, Q, K, V, mask=None):
-        # Q,K,V的维度都是[batch_size, seq_len, embeding_size]
-        # batch_size:一次送到模型的句子个数,seq_len:句子的token数量,embeding_size:词向量的维度default = 512
+        # Q,K,V 已经在 MultiHeadAttention 中完成线性投影和多头拆分
+        # 维度分别是 [batch_size, heads, seq_len, d_k]
+        # batch_size:一次送到模型的句子个数,seq_len:句子的token数量,d_k:每个注意力头的维度
         # Q:输入的query向量 维度 batch_size,heads,seq_len_q,d_k
         # K:输入的key向量 维度 batch_size,heads,seq_len_k,d_k
         # V:输入的value向量 维度 batch_size,heads,seq_len_v,d_v
-        d_k = Q.size(-1)  # d_k = d_v = embeding_size 就是词向量的维度 default = 512
+        d_k = Q.size(-1)  # 每个注意力头的维度, default = embeding_size / num_heads = 64
         # 计算Q*K.T/sqrt(d_k)得到注意力分数 维度 batch_size,heads,seq_len_q,seq_len_k
+        #
         scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(d_k)
         # 对scores进行遮罩
         if mask is not None:
             scores = scores.masked_fill(mask, -1e10)
         # batch_size,heads,seq_len_q,seq_len_k ,得到注意力的权重 概率
         attn = self.softmax(scores)
+
         attn = self.dropout(attn)
         # batch_size,heads,seq_len_q,d_v
         output = torch.matmul(attn, V)
@@ -92,6 +95,7 @@ class MultiHeadAttention(nn.Module):  # 多头注意力
         )  # 每个头的维度 default = 64 例如 512/8 = 64
         self.num_heads = num_heads  # 多头注意力的头数 default = 8
         # 将输入映射到Q,K,V的三个向量
+        # 维度是 [batch_size, seq_len, embeding_size]
         self.W_q = nn.Linear(embeding_size, embeding_size)
         self.W_k = nn.Linear(embeding_size, embeding_size)
         self.W_v = nn.Linear(embeding_size, embeding_size)
@@ -102,8 +106,11 @@ class MultiHeadAttention(nn.Module):  # 多头注意力
 
     def forward(self, q, k, v, mask=None):
         batch_size = q.size(0)
-        # Q:输入的query向量 维度 batch_size,seq_len,embeding_size  -> batch_size,seq_len,num_heads,d_k
-        # -> batch_size,num_heads,seq_len,d_k  为了让每个注意力头独立处理整个序列,方便后续计算注意力权重
+        # Q:输入的query向量 维度
+        # batch_size,seq_len,embeding_size  ->
+        # batch_size,seq_len,num_heads,d_k  ->
+        # batch_size,num_heads,seq_len,d_k
+        # 为了让每个注意力头独立处理整个序列,方便后续计算注意力权重
         Q = self.W_q(q).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
         K = self.W_k(k).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
         V = self.W_v(v).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
@@ -174,7 +181,7 @@ class EncoderLayer(nn.Module):
 
     def forward(self, src, src_mask=None):
         # src : batch_size, seq_len, embeding_size 输入序列张量
-        # src_mask : batch_size, seq_len, seq_len 屏蔽padding位置，避免关注无效区域
+        # src_mask : batch_size, 1, 1, src_len 屏蔽padding位置，避免关注无效区域
         # Q K V　=  src
         out, _ = self.mutihead_attention(src, src, src, src_mask)
         out = self.mlp(out)
@@ -277,7 +284,7 @@ class Encoder(nn.Module):
         max_len=5000,
         pad_id=0,
     ):
-        super().__init__()  # [1, seq_len] 
+        super().__init__()
         self.embeding = nn.Embedding(
             vocab_size, embeding_size, padding_idx=pad_id
         )  # [vocab_size, embeding_size] vocab_size个词向量，每个词向量的维度为embeding_size
@@ -291,11 +298,17 @@ class Encoder(nn.Module):
         )
 
     def forward(self, src, src_mask=None):
+        # src : batch_size, seq_len
+        # src_mask : batch_size, 1, 1, src_len
         # 将输入的token ID转换成embedding向量
         # 输出 shape batch_size, seq_len, embeding_size
         # 乘上sqrt(embeding_size) 进行缩放,让后续注意力计算更稳定
+
+        # [batch_size, seq_len, embeding_size]
         out = self.embeding(src) * math.sqrt(self.embeding.embedding_dim)
         out = self.position_encoding(out)
+        # 加位置编码向量
+
         # 逐层进入encoderlayer
         for encoder_layer in self.encoder_layers:
             out = encoder_layer(out, src_mask)
@@ -335,7 +348,7 @@ class Decoder(nn.Module):
                 for _ in range(num_layers)
             ]
         )
-        # 输出投影层 将decoder的输出元词汇表的大小,从而得到每个token的预测概率分布
+        # 输出投影层 将decoder的输出映射到词表大小,得到每个token的预测 logits
         self.fc_out = nn.Linear(embeding_size, vocab_size)
 
     def forward(self, tgt, memory, tgt_mask=None, memory_mask=None):
@@ -398,7 +411,10 @@ class Transformer(nn.Module):
         )
 
     def forward(self, src, tgt, src_mask=None, tgt_mask=None, memory_mask=None):
+        # src 源语言句子 token id [B, src_len]
+        # tgt 目标语言的输入 token id [B, tgt_len]
         memory = self.encoder(src, src_mask)
+        # memory 源语言的编码表示 [B, src_len, embeding_size]
         return self.decoder(
             tgt, memory, tgt_mask, memory_mask
         )  # batch_size, seq_len_tgt, vocab_size
@@ -457,17 +473,95 @@ def make_tgt_mask(tgt, tgt_pad_id):
 
 
 if __name__ == "__main__":
+    # torchinfo.summary 可以打印模型每一层的输入形状、输出形状和参数量。
+    # 注意：这个 Transformer 的 forward 需要多个输入：
+    #   forward(src, tgt, src_mask=None, tgt_mask=None, memory_mask=None)
+    # 所以下面不能只写 input_size，而要用 input_data 传入真实张量。
+    # 另外，src/tgt 是 token id，会进入 nn.Embedding，因此 dtype 必须是 torch.long。
+    from torchinfo import summary
+
+    # 这里用假的词表大小做结构测试：
+    #   src_vocab_size = 源语言词表大小，例如中文 SentencePiece 词表大小
+    #   tgt_vocab_size = 目标语言词表大小，例如英文 SentencePiece 词表大小
     src_vocab_size = 10000
     tgt_vocab_size = 10000
-    # 初始化
-    model = Transformer(src_vocab_size, tgt_vocab_size)
-    src = torch.randint(
-        0, src_vocab_size, (32, 10)
-    )  # 原序列batch=32 src_len=10 每个元素是token ID
-    tgt = torch.randint(
-        0, tgt_vocab_size, (32, 20)
-    )  # 目标序列batch=32 tgt_len=20 每个元素是token ID
-    tgt_mask = generate_mask(tgt.size(1)).to(tgt.device)
-    out = model(src, tgt, tgt_mask=tgt_mask)
-    # 每个目标token对应此表中每个词的预测概率
-    print(out.shape)  # batch_size, seq_len_tgt, vocab_size_tgt
+
+    # padding token 的 id。
+    # make_src_mask / make_tgt_mask 会用它判断哪些位置是 <pad>，需要在注意力中屏蔽。
+    src_pad_id = 0
+    tgt_pad_id = 0
+
+    # 如果本机有 CUDA，就把模型和测试张量放到 GPU；否则使用 CPU。
+    # summary 的 device 也要和 model/input_data 保持一致。
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # 初始化完整 Encoder-Decoder Transformer。
+    # 默认结构是：
+    #   embeding_size = 512
+    #   num_heads = 8
+    #   num_encoder_layers = 6
+    #   num_decoder_layers = 6
+    #   Mlp_hidden_size = 2048
+    model = Transformer(src_vocab_size, tgt_vocab_size).to(device)
+
+    # 构造一批假的源语言 token id。
+    # 形状：[batch_size, src_len] = [2, 10]
+    # 含义：一个 batch 里有 2 个源语言句子，每个句子长度是 10 个 token。
+    # 数值范围：[0, src_vocab_size)，表示每个位置都是一个源语言词表里的 token id。
+    # dtype=torch.long 是必须的，因为 nn.Embedding 只能接收整数 token id。
+    src = torch.randint(0, src_vocab_size, (2, 10), dtype=torch.long).to(device)
+
+    # 构造一批假的目标语言输入 token id。
+    # 形状：[batch_size, tgt_len] = [2, 20]
+    # 含义：一个 batch 里有 2 个目标语言句子，每个句子长度是 20 个 token。
+    # 训练时这里通常对应 tgt_input，也就是右移后的 decoder 输入序列。
+    # 经过 decoder 后，模型会对这 20 个位置分别预测下一个 token 的 logits。
+    tgt = torch.randint(0, tgt_vocab_size, (2, 20), dtype=torch.long).to(device)
+
+    # 源语言 padding mask。
+    # 输入 src 形状：[B, src_len] = [2, 10]
+    # 输出 src_mask 形状：[B, 1, 1, src_len] = [2, 1, 1, 10]
+    # True  表示该源语言位置是 <pad>，attention 需要屏蔽；
+    # False 表示该位置是真实 token，可以被 attention 看到。
+    # 它会在 encoder self-attention 中广播成：
+    #   [B, num_heads, src_len, src_len]
+    src_mask = make_src_mask(src, src_pad_id)
+
+    # 目标语言 self-attention mask。
+    # 输入 tgt 形状：[B, tgt_len] = [2, 20]
+    # 输出 tgt_mask 形状：[B, 1, tgt_len, tgt_len] = [2, 1, 20, 20]
+    # 它同时包含两类屏蔽：
+    #   1. padding mask：屏蔽目标句子里的 <pad>；
+    #   2. causal mask：屏蔽未来 token，防止 decoder 训练时偷看答案。
+    # 它会在 decoder self-attention 中广播成：
+    #   [B, num_heads, tgt_len, tgt_len]
+    tgt_mask = make_tgt_mask(tgt, tgt_pad_id)
+
+    # decoder 的 cross-attention 会用目标语言 token 去看 encoder 输出的源语言 memory。
+    # 因此 cross-attention 只需要屏蔽源语言里的 <pad>，可以直接复用 src_mask。
+    # memory_mask 形状：[B, 1, 1, src_len] = [2, 1, 1, 10]
+    # 在 cross-attention scores 中会广播成：
+    #   [B, num_heads, tgt_len, src_len] = [2, 8, 20, 10]
+    memory_mask = src_mask
+
+    # summary 会真正执行一次 model.forward。
+    # input_data 的顺序必须和 Transformer.forward 的参数顺序一致：
+    #   src         -> [2, 10]
+    #   tgt         -> [2, 20]
+    #   src_mask    -> [2, 1, 1, 10]
+    #   tgt_mask    -> [2, 1, 20, 20]
+    #   memory_mask -> [2, 1, 1, 10]
+    #
+    # 模型最终输出 logits：
+    #   out shape = [B, tgt_len, tgt_vocab_size] = [2, 20, 10000]
+    # 含义：对 batch 中每个目标句子的每个位置，都预测一个长度为 tgt_vocab_size 的词表分数。
+    # 这里是 logits，不是概率；如果要变成概率，需要额外做 softmax。
+    summary(
+        model,
+        input_data=(src, tgt, src_mask, tgt_mask, memory_mask),
+        # 打印每层输入形状、输出形状、参数量，以及参数是否可训练。
+        col_names=("input_size", "output_size", "num_params", "trainable"),
+        # depth 控制展开层级。数值越大，展示得越细，但输出也越长。
+        depth=4,
+        device=device,
+    )
